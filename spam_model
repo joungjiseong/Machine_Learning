@@ -1,0 +1,150 @@
+import numpy as np
+import pandas as pd
+import re
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# 데이터 불러오기
+data = pd.read_csv('Hamspam.csv')
+print('총 샘플의 수 :', len(data))
+
+data['MailK'] = data['MailK'].replace(['스팸', '정상'],[0,1])
+data[:5]
+
+def count_special_characters(text):
+    return len(re.findall(r'[^\w\s]', text))
+
+def count_emojis(text):
+    emoji_pattern = re.compile(
+        "[\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F700-\U0001F77F"  # alchemical symbols
+        "\U0001F780-\U0001F7FF"  # Geometric Shapes Extended
+        "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+        "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        "\U0001FA00-\U0001FA6F"  # Chess Symbols
+        "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        "\U00002702-\U000027B0"  # Dingbats
+        "]+", flags=re.UNICODE)
+    return len(emoji_pattern.findall(text))
+
+print('결측값 여부 :',data.isnull().values.any())
+print('MailName열의 유니크한 값 :',data['MailName'].nunique())
+data.drop_duplicates(subset=['MailName'], inplace=True) #데이터 전처리 해놔서 굳이 안돌려도 됨
+
+print('스팸 메일과 정상 메일의 개수')
+print(data.groupby('MailK').size().reset_index(name='count'))
+
+print(f'스팸 메일의 비율 = {round(data["MailK"].value_counts()[0]/len(data) * 100,3)}%')
+print(f'정상 메일의 비율 = {round(data["MailK"].value_counts()[1]/len(data) * 100,3)}%')
+
+X_data = data['MailName']
+y_data = data['MailK']
+print('메일 본문의 개수: {}'.format(len(X_data)))
+print('레이블의 개수: {}'.format(len(y_data)))
+
+# 특수 문자와 이모지 개수를 각 제목에 대해 계산하여 새로운 열 추가
+data['special_char_count'] = data['MailName'].apply(count_special_characters)
+data['emoji_count'] = data['MailName'].apply(count_emojis)
+
+# 특수 문자와 이모지 개수를 포함한 데이터 준비
+X_data = data[['MailName', 'special_char_count', 'emoji_count']]
+y_data = data['MailK']
+
+X_train, X_test, y_train, y_test = train_test_split(X_data, y_data, test_size=0.2, random_state=0, stratify=y_data)
+print('--------훈련 데이터의 비율-----------')
+print(f'스팸 메일 = {round(y_train.value_counts()[0]/len(y_train) * 100,3)}%')
+print(f'정상 메일 = {round(y_train.value_counts()[1]/len(y_train) * 100,3)}%')
+print('--------테스트 데이터의 비율-----------')
+print(f'스팸 메일 = {round(y_test.value_counts()[0]/len(y_test) * 100,3)}%')
+print(f'정상 메일 = {round(y_test.value_counts()[1]/len(y_test) * 100,3)}%')
+
+tokenizer = Tokenizer()
+tokenizer.fit_on_texts(X_train['MailName'])
+X_train_encoded = tokenizer.texts_to_sequences(X_train['MailName'])
+X_test_encoded = tokenizer.texts_to_sequences(X_test['MailName'])
+
+word_to_index = tokenizer.word_index
+print(word_to_index)
+vocab_size = len(word_to_index) + 1
+print('메일의 최대 길이 : %d' % max(len(sample) for sample in X_train_encoded))
+
+max_len = 64
+X_train_padded = pad_sequences(X_train_encoded, maxlen=max_len)
+X_test_padded = pad_sequences(X_test_encoded, maxlen=max_len)
+
+X_train_special_count = X_train['special_char_count'].values.reshape(-1, 1)
+X_train_emoji_count = X_train['emoji_count'].values.reshape(-1, 1)
+X_test_special_count = X_test['special_char_count'].values.reshape(-1, 1)
+X_test_emoji_count = X_test['emoji_count'].values.reshape(-1, 1)
+
+X_train_combined = np.hstack([X_train_padded, X_train_special_count, X_train_emoji_count])
+X_test_combined = np.hstack([X_test_padded, X_test_special_count, X_test_emoji_count])
+
+print("훈련 데이터의 크기(shape):", X_train_combined.shape)
+print("테스트 데이터의 크기(shape):", X_test_combined.shape)
+
+from tensorflow.keras.layers import Input, SimpleRNN, Embedding, Dense, Concatenate
+from tensorflow.keras.models import Model
+from tensorflow.keras.callbacks import LambdaCallback
+import math
+
+embedding_dim = 32
+hidden_units = 32
+
+# 텍스트 입력 레이어
+text_input = Input(shape=(max_len,), name='text_input')
+embedding = Embedding(vocab_size, embedding_dim)(text_input)
+rnn_out = SimpleRNN(hidden_units)(embedding)
+
+# 특수 문자 및 이모지 입력 레이어
+special_char_input = Input(shape=(2,), name='special_char_input')  # 특수 문자, 이모지 개수를 포함
+
+# 두 입력을 결합
+concatenated = Concatenate()([rnn_out, special_char_input])
+output = Dense(1, activation='sigmoid')(concatenated)
+
+# 모델 정의
+model = Model(inputs=[text_input, special_char_input], outputs=output)
+model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=['acc'])
+
+# 특수 문자 및 이모지 개수를 포함하여 훈련 데이터 준비
+X_train_special = np.hstack([X_train[['special_char_count', 'emoji_count']].values])
+
+steps_per_epoch = math.ceil(len(X_train_padded) / 64)
+log_steps = max(steps_per_epoch // 100, 1)  # 에폭당 약 100번 로그 출력
+
+# 학습 로그를 출력하는 콜백
+def log_progress(epoch, logs):
+    #if (epoch + 1) % 2 == 0:  # 에폭마다 시작 로그 출력
+        print(f"\nEpoch {epoch + 1} - acc: {logs['acc']:.4f}, loss: {logs['loss']:.4f}\n")
+
+log_callback = LambdaCallback(on_epoch_end=log_progress, on_batch_end=lambda batch, 
+                    logs: print(f"Step {batch+1} - acc: {logs['acc']:.4f}, loss: {logs['loss']:.4f}") if batch % log_steps == 0 else None)
+
+# 모델 학습
+history = model.fit(
+    [X_train_padded, X_train_special], y_train,
+    epochs=4,
+    batch_size=64,
+    validation_split=0.2,
+    callbacks=[log_callback],
+    verbose=0
+)
+
+# 테스트 정확도 평가
+X_test_special = np.hstack([X_test[['special_char_count', 'emoji_count']].values])
+
+print("\n 테스트 정확도: %.4f" % (model.evaluate([X_test_padded, X_test_special], y_test)[1]))
+
+import matplotlib.pyplot as plt
+epochs = range(1, len(history.history['acc']) + 1)
+plt.plot(epochs, history.history['loss'])
+plt.plot(epochs, history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'val'], loc='upper left')
+plt.show()
