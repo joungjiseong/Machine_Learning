@@ -1,0 +1,85 @@
+from tensorflow.keras.models import load_model
+import pickle
+import pandas as pd
+import numpy as np
+import re
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+
+# 함수 정의
+def count_special_characters(text):
+    return len(re.findall(r'[^\w\s]', text))
+
+def count_emojis(text):
+    emoji_pattern = re.compile(
+        "[\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F700-\U0001F77F"
+        "\U0001F780-\U0001F7FF"
+        "\U0001F800-\U0001F8FF"
+        "\U0001F900-\U0001F9FF"
+        "\U0001FA00-\U0001FA6F"
+        "\U0001FA70-\U0001FAFF"
+        "\U00002702-\U000027B0"
+        "]+", flags=re.UNICODE)
+    return len(emoji_pattern.findall(text))
+
+# 모델 및 토크나이저 로드
+loaded_model = load_model('spamModel.h5')
+with open('tokenizer.pkl', 'rb') as file:
+    tokenizer = pickle.load(file)
+
+# 테스트 데이터 준비
+test_data = pd.DataFrame({
+    'MailName': [
+        "할인! 지금 바로 구매하세요 🎉",              # 광고성 제목
+        "긴급: 계정 보안 경고 ⚠️",                  # 스팸으로 의심될 수 있는 제목
+        "당첨 축하드립니다! ☘️🎁",                   # 스팸성 제목
+        "안녕하세요, 프로젝트 관련 문의드립니다.",       # 정상적인 제목
+        "📢 중요한 공지사항 확인 바랍니다!",            # 혼합형 제목
+        "무료 상품권을 드립니다 🎟️",                 # 스팸 의심
+        "이번 주 회의 일정 확인 부탁드립니다.",         # 정상
+        "🚀 빠른 대출 승인을 도와드립니다!",            # 스팸 의심
+        "조용히 사라진 전설, 그 비밀을 밝혀드립니다!",    # 광고성 제목
+        "안전하고 빠른 비밀번호 복구 안내 이메일입니다."    # 정상적인 제목
+    ],
+    'special_char_count': [
+        count_special_characters("할인! 지금 바로 구매하세요 🎉"),
+        count_special_characters("긴급: 계정 보안 경고 ⚠️"),
+        count_special_characters("당첨 축하드립니다! ☘️🎁"),
+        count_special_characters("안녕하세요, 프로젝트 관련 문의드립니다."),
+        count_special_characters("📢 중요한 공지사항 확인 바랍니다!"),
+        count_special_characters("무료 상품권을 드립니다 🎟️"),
+        count_special_characters("이번 주 회의 일정 확인 부탁드립니다."),
+        count_special_characters("🚀 빠른 대출 승인을 도와드립니다!"),
+        count_special_characters("조용히 사라진 전설, 그 비밀을 밝혀드립니다!"),
+        count_special_characters("안전하고 빠른 비밀번호 복구 안내 이메일입니다.")
+    ],
+    'emoji_count': [
+        count_emojis("할인! 지금 바로 구매하세요 🎉"),
+        count_emojis("긴급: 계정 보안 경고 ⚠️"),
+        count_emojis("당첨 축하드립니다! ☘️🎁"),
+        count_emojis("안녕하세요, 프로젝트 관련 문의드립니다."),
+        count_emojis("📢 중요한 공지사항 확인 바랍니다!"),
+        count_emojis("무료 상품권을 드립니다 🎟️"),
+        count_emojis("이번 주 회의 일정 확인 부탁드립니다."),
+        count_emojis("🚀 빠른 대출 승인을 도와드립니다!"),
+        count_emojis("조용히 사라진 전설, 그 비밀을 밝혀드립니다!"),
+        count_emojis("안전하고 빠른 비밀번호 복구 안내 이메일입니다.")
+    ]
+})
+
+X_test = test_data[['MailName', 'special_char_count', 'emoji_count']]
+max_len = 64
+
+# 전처리
+X_test_encoded = tokenizer.texts_to_sequences(X_test['MailName'])
+X_test_padded = pad_sequences(X_test_encoded, maxlen=max_len)
+X_test_special = np.hstack([X_test[['special_char_count', 'emoji_count']].values])
+
+# 예측 실행
+predictions = loaded_model.predict([X_test_padded, X_test_special])
+for i, pred in enumerate(predictions):
+    print(f"이메일: {X_test['MailName'].iloc[i]}")
+    print(f"예측 확률: {pred[0]:.4f}")
+    print("예측 결과: 스팸" if pred[0] < 0.2 else "예측 결과: 정상")
